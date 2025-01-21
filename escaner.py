@@ -16,101 +16,108 @@ def obtener_puertos_disponibles():
 def leer_registros_dispositivo(cliente, direccion):
     """
     Lee los registros importantes del dispositivo encontrado
+    Optimizado para dispositivos SITRAD
     """
     try:
-        # Intentar leer los primeros 10 registros holding
-        resultado = cliente.read_holding_registers(
-            address=0,
-            count=10,
-            slave=direccion
-        )
+        print(f"\nLeyendo dispositivo en dirección {direccion}...")
         
-        print(f"\nValores del dispositivo en dirección {direccion}:")
-        print("-" * 40)
-        
-        if resultado and not resultado.isError():
-            registros = resultado.registers if hasattr(resultado, 'registers') else resultado
-            if registros:
-                for i, valor in enumerate(registros):
-                    print(f"Registro Holding {i}: {valor}")
-            else:
-                print("El dispositivo respondió pero no devolvió datos de registros holding")
-        else:
-            print(f"Error al leer registros holding: {resultado if resultado else 'Sin respuesta'}")
+        # Leer holding registers (registros principales en SITRAD)
+        try:
+            resultado = cliente.read_holding_registers(
+                address=0,
+                count=10,
+                slave=direccion
+            )
             
-        # Pequeña pausa entre lecturas
-        time.sleep(0.1)
+            print(f"\nRegistros Holding:")
+            print("-" * 40)
             
-        # Intentar leer registros de entrada
-        resultado_input = cliente.read_input_registers(
-            address=0,
-            count=10,
-            slave=direccion
-        )
-        
-        print("\nRegistros de entrada:")
-        print("-" * 40)
-        
-        if resultado_input and not resultado_input.isError():
-            registros_input = resultado_input.registers if hasattr(resultado_input, 'registers') else resultado_input
-            if registros_input:
-                for i, valor in enumerate(registros_input):
-                    # Convertir a temperatura si el valor está en el rango esperado
-                    if -50 <= valor <= 150:
-                        print(f"Registro Input {i}: {valor/10:.1f}°C")
-                    else:
-                        print(f"Registro Input {i}: {valor}")
+            if resultado and not resultado.isError():
+                registros = resultado.registers if hasattr(resultado, 'registers') else resultado
+                if registros:
+                    for i, valor in enumerate(registros):
+                        # SITRAD suele usar el registro 0 para identificación
+                        if i == 0:
+                            print(f"Registro Holding {i} (ID): {valor}")
+                        else:
+                            print(f"Registro Holding {i}: {valor}")
+                else:
+                    print("No hay datos en registros holding")
             else:
-                print("El dispositivo respondió pero no devolvió datos de registros input")
-        else:
-            print(f"Error al leer registros input: {resultado_input if resultado_input else 'Sin respuesta'}")
+                print("No se pudo leer registros holding")
+            
+            time.sleep(0.2)
+            
+            # Intentar leer registros de temperatura (input registers)
+            resultado_input = cliente.read_input_registers(
+                address=0,
+                count=10,
+                slave=direccion
+            )
+            
+            print("\nRegistros Input (Temperatura):")
+            print("-" * 40)
+            
+            if resultado_input and not resultado_input.isError():
+                registros = resultado_input.registers if hasattr(resultado_input, 'registers') else resultado_input
+                if registros:
+                    for i, valor in enumerate(registros):
+                        # SITRAD suele usar valores de temperatura multiplicados por 10
+                        if -500 <= valor <= 1500:  # Rango ampliado para SITRAD (-50°C a 150°C)
+                            print(f"Registro Input {i}: {valor/10:.1f}°C")
+                        else:
+                            print(f"Registro Input {i}: {valor}")
+                else:
+                    print("No hay datos en registros input")
+            else:
+                print("No se pudo leer registros input")
                 
-    except ModbusException as e:
-        print(f"Error Modbus al leer registros: {str(e)}")
-        print(f"Tipo de error: {type(e).__name__}")
+        except ModbusException as e:
+            print(f"Error al leer registros: {str(e)}")
+            
     except Exception as e:
-        print(f"Error inesperado: {str(e)}")
-        print(f"Tipo de error: {type(e).__name__}")
+        print(f"Error al leer dispositivo: {str(e)}")
 
-def escanear_dispositivos(puerto_serial, velocidad=9600, timeout=0.2):
+def escanear_dispositivos(puerto_serial, velocidad=9600, timeout=0.3):
     """
     Escanea dispositivos Modbus RTU en el puerto serial especificado.
-    
-    Args:
-        puerto_serial (str): Puerto serial (ejemplo: 'COM1' en Windows, '/dev/ttyUSB0' en Linux)
-        velocidad (int): Velocidad en baudios
-        timeout (float): Tiempo de espera para cada intento de conexión
+    Configuración optimizada para convertidor USB-Serial SITRAD.
     """
-    # Configurar cliente Modbus RTU
+    # Configurar cliente Modbus RTU con parámetros específicos para SITRAD
     cliente = ModbusSerialClient(
         port=puerto_serial,
         baudrate=velocidad,
         timeout=timeout,
-        parity='N',
+        parity='E',  # SITRAD usa paridad par (Even)
         stopbits=1,
-        bytesize=8
+        bytesize=8,
+        retries=2,
+        retry_on_empty=True,
+        strict=False
     )
     
     if not cliente.connect():
         print(f"Error: No se pudo conectar al puerto {puerto_serial}")
-        print("Esto puede deberse a que:")
-        print("1. SITRAD aún está abierto y usando el puerto")
-        print("2. Otro programa está usando el puerto")
-        print("3. El convertidor no está conectado correctamente")
+        print("Verificación para convertidor SITRAD:")
+        print("1. Asegúrese que SITRAD está completamente cerrado")
+        print("2. Desconecte y reconecte el convertidor USB")
+        print("3. El LED del convertidor debe estar parpadeando")
+        print("4. Verifique que el convertidor aparece en el Administrador de dispositivos")
         return []
-    
+
     dispositivos_encontrados = []
     
     print(f"\nIniciando escaneo en {puerto_serial} a {velocidad} baudios...")
+    print("Configuración: Convertidor SITRAD")
     print("Este proceso puede tomar varios minutos. Por favor, espere...\n")
     
     # Escanear direcciones del 1 al 247 (rango válido para Modbus)
     for direccion in range(1, 248):
+        sys.stdout.write(f"\rEscaneando dirección: {direccion}/247")
+        sys.stdout.flush()
+        
         try:
-            sys.stdout.write(f"\rEscaneando dirección: {direccion}/247")
-            sys.stdout.flush()
-            
-            # Intentar leer el primer registro holding
+            # SITRAD principalmente usa registros holding
             resultado = cliente.read_holding_registers(
                 address=0,
                 count=1,
@@ -120,15 +127,17 @@ def escanear_dispositivos(puerto_serial, velocidad=9600, timeout=0.2):
             if resultado and not resultado.isError():
                 print(f"\n¡Dispositivo encontrado en dirección {direccion}!")
                 dispositivos_encontrados.append(direccion)
-                # Leer registros cuando se encuentra un dispositivo
-                time.sleep(0.2)  # Pausa antes de leer los registros
+                time.sleep(0.3)
                 leer_registros_dispositivo(cliente, direccion)
                 print("\nContinuando escaneo...")
             
         except ModbusException:
             pass
+        except Exception as e:
+            print(f"\nError en dirección {direccion}: {str(e)}")
+            continue
         
-        time.sleep(0.15)  # Aumentado el tiempo de pausa entre intentos
+        time.sleep(0.1)  # Pausa corta entre direcciones
     
     cliente.close()
     return dispositivos_encontrados
