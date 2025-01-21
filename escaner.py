@@ -71,7 +71,7 @@ def leer_registros_dispositivo(cliente, direccion):
                     print("No hay datos en registros input")
             else:
                 print("No se pudo leer registros input")
-                
+            
         except ModbusException as e:
             print(f"Error al leer registros: {str(e)}")
             
@@ -161,101 +161,126 @@ def obtener_info_puertos():
     return info_puertos
 
 def main():
-    print("=== Escáner de Dispositivos Modbus RTU para SITRAD ===\n")
-    
-    # Mostrar información detallada de los puertos
-    print("Información de puertos COM detectados:")
-    print("-" * 50)
-    info_puertos = obtener_info_puertos()
-    
-    if info_puertos:
-        for info in info_puertos:
-            print(f"\nPuerto: {info['puerto']}")
-            print(f"Descripción: {info['descripcion']}")
-            if info['fabricante']:
-                print(f"Fabricante: {info['fabricante']}")
-            if info['vid'] and info['pid']:
-                print(f"VID:PID: {info['vid']:04X}:{info['pid']:04X}")
-    else:
-        print("No se detectaron puertos COM")
-        print("Posibles soluciones:")
-        print("1. Instale el driver correcto para su convertidor USB-Serial")
-        print("2. Verifique que el convertidor esté conectado")
-        print("3. Pruebe con otro puerto USB")
-        input("\nPresione Enter para salir...")
-        return
-    
-    print("=== Escáner de Dispositivos Modbus RTU para SITRAD ===\n")
-    print("IMPORTANTE: Antes de continuar:")
-    print("1. Cierre el programa SITRAD")
-    print("2. Anote el puerto COM y velocidad que usa SITRAD")
-    print("3. Después de usar el escáner, podrá volver a abrir SITRAD\n")
-    
-    continuar = input("¿Ha cerrado SITRAD? (s/n): ")
-    if continuar.lower() != 's':
-        print("\nPor favor, cierre SITRAD antes de continuar.")
-        input("\nPresione Enter para salir...")
-        return
+    try:
+        print("=== Escáner de Dispositivos Modbus RTU para SITRAD ===\n")
+        
+        # Mostrar información detallada de los puertos
+        print("Información de puertos COM detectados:")
+        print("-" * 50)
+        try:
+            info_puertos = obtener_info_puertos()
+        except Exception as e:
+            print(f"\nError al obtener información de puertos: {str(e)}")
+            print("Verifique los permisos de acceso a puertos COM")
+            input("\nPresione Enter para salir...")
+            return
+        
+        if info_puertos:
+            for info in info_puertos:
+                print(f"\nPuerto: {info['puerto']}")
+                print(f"Descripción: {info['descripcion']}")
+                if info['fabricante']:
+                    print(f"Fabricante: {info['fabricante']}")
+                if info['vid'] and info['pid']:
+                    print(f"VID:PID: {info['vid']:04X}:{info['pid']:04X}")
+        else:
+            print("No se detectaron puertos COM")
+            print("Posibles soluciones:")
+            print("1. Instale el driver correcto para su convertidor USB-Serial")
+            print("2. Verifique que el convertidor esté conectado")
+            print("3. Pruebe con otro puerto USB")
+            input("\nPresione Enter para salir...")
+            return
+        
+        print("=== Escáner de Dispositivos Modbus RTU para SITRAD ===\n")
+        print("IMPORTANTE: Antes de continuar:")
+        print("1. Cierre el programa SITRAD")
+        print("2. Anote el puerto COM y velocidad que usa SITRAD")
+        print("3. Después de usar el escáner, podrá volver a abrir SITRAD\n")
+        
+        continuar = input("¿Ha cerrado SITRAD? (s/n): ")
+        if continuar.lower() != 's':
+            print("\nPor favor, cierre SITRAD antes de continuar.")
+            input("\nPresione Enter para salir...")
+            return
 
-    # Obtener puertos COM disponibles
-    puertos_disponibles = obtener_puertos_disponibles()
-    
-    if not puertos_disponibles:
-        print("Error: No se encontraron puertos COM disponibles")
-        print("Verifique que el convertidor esté conectado y SITRAD esté cerrado")
+        # Obtener puertos COM disponibles
+        puertos_disponibles = obtener_puertos_disponibles()
+        
+        if not puertos_disponibles:
+            print("Error: No se encontraron puertos COM disponibles")
+            print("Verifique que el convertidor esté conectado y SITRAD esté cerrado")
+            input("\nPresione Enter para salir...")
+            return
+        
+        print("Puertos COM disponibles:")
+        for i, puerto in enumerate(puertos_disponibles, 1):
+            print(f"{i}. {puerto}")
+        print("\nNOTA: Seleccione el mismo puerto COM que usa SITRAD")
+        
+        # Selección del puerto
+        while True:
+            try:
+                seleccion = int(input("\nSeleccione el número del puerto (1-{}): ".format(len(puertos_disponibles))))
+                if 1 <= seleccion <= len(puertos_disponibles):
+                    puerto_seleccionado = puertos_disponibles[seleccion - 1]
+                    break
+                else:
+                    print("Por favor, seleccione un número válido")
+            except ValueError:
+                print("Por favor, ingrese un número válido")
+        
+        # Velocidades comunes en SITRAD
+        velocidades = [9600, 19200]
+        print("\nSeleccione la velocidad:")
+        for i, vel in enumerate(velocidades, 1):
+            print(f"{i}. {vel} baudios")
+        
+        while True:
+            try:
+                sel_vel = int(input("\nSeleccione la velocidad (1-{}): ".format(len(velocidades))))
+                if 1 <= sel_vel <= len(velocidades):
+                    velocidad = velocidades[sel_vel - 1]
+                    break
+                else:
+                    print("Por favor, seleccione un número válido")
+            except ValueError:
+                print("Por favor, ingrese un número válido")
+        
+        # Escanear dispositivos
+        dispositivos = escanear_dispositivos(puerto_seleccionado, velocidad)
+        
+        print("\n" + "="*40)
+        if dispositivos:
+            print("\nDispositivos encontrados en las siguientes direcciones:")
+            for direccion in dispositivos:
+                print(f"- Dirección: {direccion}")
+        else:
+            print("\nNo se encontraron dispositivos.")
+            print("Sugerencias:")
+            print("1. Verifique que sea el mismo puerto COM que usa SITRAD")
+            print("2. Confirme que la velocidad seleccionada coincida con SITRAD")
+            print("3. Asegúrese que los dispositivos estén encendidos")
+        
+        input("\nPresione Enter para salir...")
+
+    except Exception as e:
+        print("\n¡Se ha producido un error inesperado!")
+        print(f"Error: {str(e)}")
+        print("\nPor favor, verifique:")
+        print("1. Que tiene permisos de administrador")
+        print("2. Que los drivers USB están correctamente instalados")
+        print("3. Que no hay otros programas usando los puertos COM")
         input("\nPresione Enter para salir...")
         return
-    
-    print("Puertos COM disponibles:")
-    for i, puerto in enumerate(puertos_disponibles, 1):
-        print(f"{i}. {puerto}")
-    print("\nNOTA: Seleccione el mismo puerto COM que usa SITRAD")
-    
-    # Selección del puerto
-    while True:
-        try:
-            seleccion = int(input("\nSeleccione el número del puerto (1-{}): ".format(len(puertos_disponibles))))
-            if 1 <= seleccion <= len(puertos_disponibles):
-                puerto_seleccionado = puertos_disponibles[seleccion - 1]
-                break
-            else:
-                print("Por favor, seleccione un número válido")
-        except ValueError:
-            print("Por favor, ingrese un número válido")
-    
-    # Velocidades comunes en SITRAD
-    velocidades = [9600, 19200]
-    print("\nSeleccione la velocidad:")
-    for i, vel in enumerate(velocidades, 1):
-        print(f"{i}. {vel} baudios")
-    
-    while True:
-        try:
-            sel_vel = int(input("\nSeleccione la velocidad (1-{}): ".format(len(velocidades))))
-            if 1 <= sel_vel <= len(velocidades):
-                velocidad = velocidades[sel_vel - 1]
-                break
-            else:
-                print("Por favor, seleccione un número válido")
-        except ValueError:
-            print("Por favor, ingrese un número válido")
-    
-    # Escanear dispositivos
-    dispositivos = escanear_dispositivos(puerto_seleccionado, velocidad)
-    
-    print("\n" + "="*40)
-    if dispositivos:
-        print("\nDispositivos encontrados en las siguientes direcciones:")
-        for direccion in dispositivos:
-            print(f"- Dirección: {direccion}")
-    else:
-        print("\nNo se encontraron dispositivos.")
-        print("Sugerencias:")
-        print("1. Verifique que sea el mismo puerto COM que usa SITRAD")
-        print("2. Confirme que la velocidad seleccionada coincida con SITRAD")
-        print("3. Asegúrese que los dispositivos estén encendidos")
-    
-    input("\nPresione Enter para salir...")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nPrograma interrumpido por el usuario.")
+    except Exception as e:
+        print(f"\nError crítico: {str(e)}")
+    finally:
+        print("\nCerrando programa...")
+        input("Presione Enter para salir...")
