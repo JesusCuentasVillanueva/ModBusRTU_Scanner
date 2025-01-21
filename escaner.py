@@ -25,19 +25,21 @@ def leer_registros_dispositivo(cliente, direccion):
             slave=direccion
         )
         
-        if hasattr(resultado, 'registers'):  # Verificamos si tiene el atributo registers
-            print(f"\nValores del dispositivo en dirección {direccion}:")
-            print("-" * 40)
-            for i, valor in enumerate(resultado.registers):
-                print(f"Registro {i}: {valor}")
-        else:
-            print(f"\nValores del dispositivo en dirección {direccion}:")
-            print("-" * 40)
-            if isinstance(resultado, list):
-                for i, valor in enumerate(resultado):
-                    print(f"Registro {i}: {valor}")
+        print(f"\nValores del dispositivo en dirección {direccion}:")
+        print("-" * 40)
+        
+        if resultado and not resultado.isError():
+            registros = resultado.registers if hasattr(resultado, 'registers') else resultado
+            if registros:
+                for i, valor in enumerate(registros):
+                    print(f"Registro Holding {i}: {valor}")
             else:
-                print("No se pudieron leer los registros holding")
+                print("El dispositivo respondió pero no devolvió datos de registros holding")
+        else:
+            print(f"Error al leer registros holding: {resultado if resultado else 'Sin respuesta'}")
+            
+        # Pequeña pausa entre lecturas
+        time.sleep(0.1)
             
         # Intentar leer registros de entrada
         resultado_input = cliente.read_input_registers(
@@ -46,33 +48,31 @@ def leer_registros_dispositivo(cliente, direccion):
             slave=direccion
         )
         
-        if hasattr(resultado_input, 'registers'):
-            print("\nRegistros de entrada:")
-            print("-" * 40)
-            for i, valor in enumerate(resultado_input.registers):
-                # Convertir a temperatura si el valor está en el rango esperado
-                if -50 <= valor <= 150:
-                    print(f"Registro {i}: {valor/10:.1f}°C")
-                else:
-                    print(f"Registro {i}: {valor}")
-        else:
-            print("\nRegistros de entrada:")
-            print("-" * 40)
-            if isinstance(resultado_input, list):
-                for i, valor in enumerate(resultado_input):
+        print("\nRegistros de entrada:")
+        print("-" * 40)
+        
+        if resultado_input and not resultado_input.isError():
+            registros_input = resultado_input.registers if hasattr(resultado_input, 'registers') else resultado_input
+            if registros_input:
+                for i, valor in enumerate(registros_input):
+                    # Convertir a temperatura si el valor está en el rango esperado
                     if -50 <= valor <= 150:
-                        print(f"Registro {i}: {valor/10:.1f}°C")
+                        print(f"Registro Input {i}: {valor/10:.1f}°C")
                     else:
-                        print(f"Registro {i}: {valor}")
+                        print(f"Registro Input {i}: {valor}")
             else:
-                print("No se pudieron leer los registros de entrada")
+                print("El dispositivo respondió pero no devolvió datos de registros input")
+        else:
+            print(f"Error al leer registros input: {resultado_input if resultado_input else 'Sin respuesta'}")
                 
     except ModbusException as e:
-        print(f"Error al leer registros detallados: {str(e)}")
+        print(f"Error Modbus al leer registros: {str(e)}")
+        print(f"Tipo de error: {type(e).__name__}")
     except Exception as e:
         print(f"Error inesperado: {str(e)}")
+        print(f"Tipo de error: {type(e).__name__}")
 
-def escanear_dispositivos(puerto_serial, velocidad=9600, timeout=0.1):
+def escanear_dispositivos(puerto_serial, velocidad=9600, timeout=0.2):
     """
     Escanea dispositivos Modbus RTU en el puerto serial especificado.
     
@@ -117,17 +117,18 @@ def escanear_dispositivos(puerto_serial, velocidad=9600, timeout=0.1):
                 slave=direccion
             )
             
-            if resultado:
+            if resultado and not resultado.isError():
                 print(f"\n¡Dispositivo encontrado en dirección {direccion}!")
                 dispositivos_encontrados.append(direccion)
                 # Leer registros cuando se encuentra un dispositivo
+                time.sleep(0.2)  # Pausa antes de leer los registros
                 leer_registros_dispositivo(cliente, direccion)
                 print("\nContinuando escaneo...")
             
         except ModbusException:
             pass
         
-        time.sleep(0.1)  # Pequeña pausa entre intentos
+        time.sleep(0.15)  # Aumentado el tiempo de pausa entre intentos
     
     cliente.close()
     return dispositivos_encontrados
