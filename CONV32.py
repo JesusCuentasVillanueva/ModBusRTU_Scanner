@@ -4,6 +4,8 @@ from datetime import datetime
 import sys
 import logging
 from serial.tools import list_ports
+from tkinter import filedialog
+import tkinter as tk
 
 class CONV32Error(Exception):
     """Clase base para excepciones del CONV32"""
@@ -513,7 +515,6 @@ class CONV32Reader:
     def monitor_sitrad_database(self):
         """Monitorea y lee la base de datos de SITRAD"""
         try:
-            import sqlite3
             import os
             from pathlib import Path
             
@@ -522,15 +523,36 @@ class CONV32Reader:
             print("Rutas posibles:")
             print("1. C:/SitradDesktop.db")
             print("2. C:/Program Files/Sitrad/SitradDesktop.db")
-            print("3. Especificar otra ruta")
+            print("3. Buscar archivo...")
+            print("4. Especificar ruta manualmente")
             
-            opcion = input("\nSeleccione una opción (1-3): ")
+            opcion = input("\nSeleccione una opción (1-4): ")
             
             if opcion == "1":
                 sitrad_db_path = Path("C:/SitradDesktop.db")
             elif opcion == "2":
                 sitrad_db_path = Path("C:/Program Files/Sitrad/SitradDesktop.db")
             elif opcion == "3":
+                # Crear una ventana tk root (oculta)
+                root = tk.Tk()
+                root.withdraw()
+                
+                # Abrir diálogo de selección de archivo
+                file_path = filedialog.askopenfilename(
+                    title='Seleccionar base de datos SITRAD',
+                    filetypes=[
+                        ('Bases de datos', '*.db'),
+                        ('Todos los archivos', '*.*')
+                    ],
+                    initialdir=os.path.expanduser("~")  # Comenzar en el directorio del usuario
+                )
+                
+                if not file_path:  # Si el usuario canceló la selección
+                    print("Selección cancelada")
+                    return
+                    
+                sitrad_db_path = Path(file_path)
+            elif opcion == "4":
                 ruta = input("\nIngrese la ruta completa a la base de datos: ")
                 sitrad_db_path = Path(ruta)
             else:
@@ -540,29 +562,47 @@ class CONV32Reader:
             if not sitrad_db_path.exists():
                 self.logger.error(f"Base de datos no encontrada en {sitrad_db_path}")
                 return
+
+            print(f"\nUtilizando base de datos: {sitrad_db_path}")
             
-            self.logger.info(f"Conectando a base de datos SITRAD: {sitrad_db_path}")
+            # Detectar tipo de archivo
+            with open(sitrad_db_path, 'rb') as f:
+                header = f.read(16)
+                
+                # Verificar firma de SQLite
+                if header.startswith(b'SQLite format 3\0'):
+                    self.read_sqlite_database(sitrad_db_path)
+                else:
+                    print("\nFormato de archivo detectado:")
+                    print(f"Primeros bytes: {header.hex()}")
+                    self.analyze_unknown_database(sitrad_db_path)
+                
+        except Exception as e:
+            self.logger.error(f"Error accediendo a base de datos SITRAD: {e}")
+
+    def read_sqlite_database(self, db_path):
+        """Lee una base de datos SQLite"""
+        try:
+            import sqlite3
+            self.logger.info(f"Conectando a base de datos SQLite: {db_path}")
             
-            try:
-                conn = sqlite3.connect(str(sitrad_db_path))
+            with sqlite3.connect(str(db_path)) as conn:
                 cursor = conn.cursor()
                 
                 # Obtener lista de tablas
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
                 tablas = cursor.fetchall()
                 
-                print("\n=== Tablas encontradas en la base de datos ===")
+                print("\n=== Tablas encontradas en la base de datos SQLite ===")
                 for tabla in tablas:
                     print(f"\nTabla: {tabla[0]}")
                     try:
-                        # Mostrar estructura de la tabla
                         cursor.execute(f"PRAGMA table_info({tabla[0]})")
                         columnas = cursor.fetchall()
                         print("Columnas:")
                         for col in columnas:
                             print(f"- {col[1]} ({col[2]})")
                             
-                        # Mostrar primeros registros
                         cursor.execute(f"SELECT * FROM {tabla[0]} LIMIT 5")
                         registros = cursor.fetchall()
                         if registros:
@@ -572,14 +612,37 @@ class CONV32Reader:
                     except sqlite3.Error as e:
                         print(f"Error leyendo tabla {tabla[0]}: {e}")
                     
-            except sqlite3.Error as e:
-                self.logger.error(f"Error de SQLite: {e}")
-            finally:
-                if conn:
-                    conn.close()
+        except sqlite3.Error as e:
+            self.logger.error(f"Error de SQLite: {e}")
+
+    def analyze_unknown_database(self, db_path):
+        """Analiza una base de datos de formato desconocido"""
+        try:
+            with open(db_path, 'rb') as f:
+                # Leer los primeros 1024 bytes para análisis
+                data = f.read(1024)
+                
+                print("\n=== Análisis de archivo de base de datos ===")
+                print(f"Tamaño del archivo: {os.path.getsize(db_path)} bytes")
+                
+                # Buscar patrones conocidos
+                print("\nBuscando patrones conocidos en el archivo...")
+                
+                # Mostrar vista hexadecimal de los primeros bytes
+                print("\nPrimeros 64 bytes en hexadecimal:")
+                hex_dump = ' '.join(f'{b:02x}' for b in data[:64])
+                print(hex_dump)
+                
+                # Intentar detectar texto legible
+                print("\nTexto legible encontrado:")
+                printable = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in data[:256])
+                print(printable)
+                
+                print("\nNOTA: Este archivo no parece ser una base de datos SQLite.")
+                print("Se requiere más información sobre el formato de la base de datos de SITRAD.")
                 
         except Exception as e:
-            self.logger.error(f"Error accediendo a base de datos SITRAD: {e}")
+            self.logger.error(f"Error analizando archivo: {e}")
 
 class SitradEmulator:
     """Emula el protocolo SITRAD para comunicación con CONV32"""
