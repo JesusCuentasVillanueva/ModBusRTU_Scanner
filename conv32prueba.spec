@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['escaner.py'],
+    ['CONV32.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -21,7 +21,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='modbus-escaner',
+    name='conv32prueba',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -40,5 +40,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='modbus-escaner',
+    name='conv32prueba',
 )
