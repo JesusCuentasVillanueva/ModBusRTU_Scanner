@@ -20,32 +20,14 @@ class DeviceError(CONV32Error):
 class CONV32Reader:
     def __init__(self, port='COM3', baudrate=9600, log_level=logging.INFO):
         self.port = port
-        # Configuraciones comunes para CONV32
-        self.serial_configs = [
-            {
-                'baudrate': 9600,
-                'bytesize': serial.EIGHTBITS,
-                'parity': serial.PARITY_NONE,
-                'stopbits': serial.STOPBITS_ONE,
-                'timeout': 1
-            },
-            {
-                'baudrate': 9600,
-                'bytesize': serial.EIGHTBITS,
-                'parity': serial.PARITY_EVEN,
-                'stopbits': serial.STOPBITS_ONE,
-                'timeout': 1
-            },
-            {
-                'baudrate': 19200,
-                'bytesize': serial.EIGHTBITS,
-                'parity': serial.PARITY_NONE,
-                'stopbits': serial.STOPBITS_ONE,
-                'timeout': 1
-            }
-        ]
-        self.current_config = 0  # Índice de la configuración actual
-        self.serial_config = self.serial_configs[self.current_config]
+        # Configuración exacta de SITRAD
+        self.serial_config = {
+            'baudrate': 9600,
+            'bytesize': serial.EIGHTBITS,
+            'parity': serial.PARITY_NONE,
+            'stopbits': serial.STOPBITS_ONE,
+            'timeout': 1
+        }
         self.ser = None
         self.setup_logging(log_level)
         self.test_mode = False
@@ -108,88 +90,107 @@ class CONV32Reader:
             raise ConnectionError("No hay conexión activa con el dispositivo")
 
     def read_device(self, address):
-        """Lee datos de un dispositivo específico"""
+        """Lee datos usando protocolo SITRAD"""
         try:
             self.verify_connection()
 
             if not 1 <= address <= 32:
-                raise ValueError(f"Dirección inválida: {address}. Debe estar entre 1 y 32")
+                raise ValueError(f"Dirección inválida: {address}")
 
-            # Limpiamos buffer antes de leer
-            if self.ser.in_waiting:
-                self.ser.reset_input_buffer()
-
+            # Limpiamos buffer
+            self.ser.reset_input_buffer()
+            
+            # Enviamos comando
             comando = self.create_command(address)
             self.ser.write(comando)
             
-            # Esperamos respuesta con timeout
-            timeout = time.time() + 2.0  # 2 segundos de timeout
+            # SITRAD espera un poco más
+            time.sleep(0.5)
+            
+            # Leemos respuesta completa
             response = bytearray()
+            timeout = time.time() + 1.0
             
             while time.time() < timeout:
                 if self.ser.in_waiting:
                     byte = self.ser.read()
                     response.extend(byte)
-                    if len(response) >= 3:  # Esperamos mínimo 3 bytes
+                    # SITRAD usa 0x03 (ETX) como fin de mensaje
+                    if byte[0] == 0x03:
                         break
-                time.sleep(0.1)
+                time.sleep(0.05)
 
-            if len(response) >= 3:
-                if self.test_mode:
-                    print(f"Datos recibidos: {response.hex()}")
+            if self.test_mode:
+                print(f"Respuesta SITRAD: {response.hex()}")
+            
+            if len(response) >= 5:  # Mínimo para una respuesta válida
                 return self.parse_response(response)
             
-            if self.test_mode:
-                print(f"No se recibió respuesta completa del dispositivo {address}")
             return None
 
         except Exception as e:
-            self.logger.error(f"Error al leer dispositivo {address}: {e}")
+            self.logger.error(f"Error leyendo CONV32 {address}: {e}")
             return None
 
     def create_command(self, address):
-        """Crea el comando de lectura para el CONV32 de Full Gauge"""
+        """Crea el comando exacto que usa SITRAD para CONV32"""
         try:
-            # Probamos diferentes formatos de comando
-            commands = [
-                bytes([address, 0x03]),           # Formato básico
-                bytes([address, 0x03, 0x00]),     # Con byte adicional
-                bytes([address, 0x02]),           # Comando alternativo
-                bytes([0xFF, address, 0x03])      # Con prefijo
-            ]
-            return commands[0]  # Comenzamos con el primer formato
+            # Protocolo SITRAD para CONV32:
+            # Byte 1: 0x02 (STX - Start of Text)
+            # Byte 2: Dirección
+            # Byte 3: 0x72 (Comando de lectura SITRAD)
+            # Byte 4: Checksum (XOR de bytes 2 y 3)
+            cmd = 0x72  # Comando específico de SITRAD
+            checksum = address ^ cmd  # XOR para checksum
+            
+            comando = bytes([
+                0x02,      # STX
+                address,   # Dirección
+                cmd,      # Comando lectura
+                checksum  # Checksum
+            ])
+            
+            if self.test_mode:
+                print(f"Comando SITRAD: {comando.hex()}")
+            
+            return comando
         except Exception as e:
-            raise DeviceError(f"Error creando comando de lectura: {e}")
+            raise DeviceError(f"Error creando comando SITRAD: {e}")
 
     def parse_response(self, response):
-        """Parsea la respuesta del CONV32"""
+        """Parsea la respuesta del protocolo SITRAD"""
         try:
-            if not response or len(response) < 3:
-                raise DeviceError("Respuesta incompleta del CONV32")
-
-            # El CONV32 en modo lectura devuelve:
-            # Byte 0: Dirección del dispositivo
-            # Byte 1: Valor entero de temperatura
-            # Byte 2: Valor decimal / flags
+            # Formato respuesta SITRAD:
+            # Byte 1: 0x02 (STX)
+            # Byte 2: Dirección
+            # Byte 3: Status
+            # Byte 4: Temperatura (valor * 10)
+            # Byte 5: Checksum
+            # Byte 6: 0x03 (ETX)
             
-            valor_entero = response[1]
-            valor_decimal = response[2] & 0x0F  # Los 4 bits menos significativos
+            if response[0] != 0x02 or response[-1] != 0x03:
+                return None
             
-            # Construimos la temperatura
-            temperatura = valor_entero + (valor_decimal / 10.0)
+            status = response[2]
+            if status != 0:
+                self.logger.warning(f"Status SITRAD no es 0: {status}")
+                return None
             
-            # Verificamos si es negativa (bit más significativo del byte 2)
-            if response[2] & 0x80:
-                temperatura = -temperatura
+            # La temperatura viene multiplicada por 10
+            temp_raw = response[3]
+            temperatura = temp_raw / 10.0
             
-            # Validación de rango para CONV32
-            if not -50 <= temperatura <= 105:
-                raise DeviceError(f"Temperatura fuera de rango CONV32: {temperatura}°C")
-                
+            # Verificar checksum
+            checksum = response[-2]
+            calc_checksum = response[1] ^ response[2] ^ response[3]
+            if checksum != calc_checksum:
+                self.logger.warning("Error de checksum en respuesta")
+                return None
+            
             return temperatura
 
         except Exception as e:
-            self.logger.error(f"Error parseando respuesta CONV32: {e}")
+            self.logger.error(f"Error parseando respuesta SITRAD: {e}")
             return None
 
     def set_test_mode(self, enabled=True):
@@ -199,49 +200,38 @@ class CONV32Reader:
             self.logger.setLevel(logging.DEBUG)
 
     def test_connection(self):
-        """Prueba específica para lectura del CONV32 con múltiples configuraciones"""
+        """Prueba de conexión específica para CONV32"""
         try:
-            print("\n=== Prueba de Lectura CONV32 ===")
-            print("Probando diferentes configuraciones...")
-
-            for i, config in enumerate(self.serial_configs):
-                self.serial_config = config
-                print(f"\nProbando configuración {i+1}:")
-                print(f"Baudrate: {config['baudrate']}")
-                print(f"Paridad: {config['parity']}")
-                print(f"Bits: {config['bytesize']}")
+            print("\n=== Prueba de Conexión CONV32 ===")
+            print("Configuración:")
+            print(f"Puerto: {self.port}")
+            print(f"Baudrate: {self.serial_config['baudrate']}")
+            print(f"Bits: {self.serial_config['bytesize']}")
+            print(f"Paridad: {self.serial_config['parity']}")
+            
+            self.connect()
+            print("✓ Puerto abierto")
+            
+            # Probamos direcciones típicas
+            for addr in [1, 2]:
+                print(f"\nProbando CONV32 en dirección {addr}...")
+                temp = self.read_device(addr)
+                if temp is not None:
+                    print(f"✓ Temperatura leída: {temp}°C")
+                    return True
                 
-                try:
-                    if self.ser and self.ser.is_open:
-                        self.ser.close()
-                    self.connect()
-                    print("✓ Puerto abierto")
-                    
-                    # Probamos lectura con diferentes direcciones comunes
-                    for addr in [1, 2, 3, 0xFF]:
-                        print(f"\nProbando dirección: {addr}")
-                        temp = self.read_device(addr)
-                        if temp is not None:
-                            print(f"✓ Temperatura leída: {temp}°C")
-                            print("\n¡Configuración exitosa encontrada!")
-                            return True
-                        
-                except Exception as e:
-                    print(f"Error con configuración {i+1}: {e}")
-                    continue
-
-            print("\n⚠ No se pudo establecer comunicación")
-            print("\nSugerencias:")
-            print("1. Verifique el cableado RS-485:")
-            print("   - A+ del CONV32 → A+ del conversor")
-            print("   - B- del CONV32 → B- del conversor")
-            print("2. Verifique la alimentación del CONV32")
-            print("3. Confirme la dirección del dispositivo en el CONV32")
-            print("4. Intente con otro conversor RS-485")
+            print("\n⚠ No se detectó ningún CONV32")
+            print("\nVerifique:")
+            print("1. Conexiones RS-485:")
+            print("   - TX+ / A+ → A+ del CONV32")
+            print("   - TX- / B- → B- del CONV32")
+            print("2. Alimentación del CONV32")
+            print("3. Dirección configurada en el CONV32")
+            print("4. Que no haya otros dispositivos usando el puerto")
             return False
             
         except Exception as e:
-            print(f"\n❌ Error en prueba: {e}")
+            print(f"\n❌ Error: {e}")
             return False
 
     def scan_with_options(self):
