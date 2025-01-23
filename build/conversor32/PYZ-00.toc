@@ -1,4 +1,4 @@
-('C:\\Users\\yoshu\\desktop\\ModBusRTU_Scanner\\build\\conv32\\PYZ-00.pyz',
+('C:\\Users\\yoshu\\desktop\\ModBusRTU_Scanner\\build\\conversor32\\PYZ-00.pyz',
  [('__future__', 'd:\\anaconda\\lib\\__future__.py', 'PYMODULE'),
   ('_compat_pickle', 'd:\\anaconda\\lib\\_compat_pickle.py', 'PYMODULE'),
   ('_compression', 'd:\\anaconda\\lib\\_compression.py', 'PYMODULE'),

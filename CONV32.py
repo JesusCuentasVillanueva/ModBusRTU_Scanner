@@ -20,16 +20,35 @@ class DeviceError(CONV32Error):
 class CONV32Reader:
     def __init__(self, port='COM3', baudrate=9600, log_level=logging.INFO):
         self.port = port
-        self.serial_config = {
-            'baudrate': baudrate,
-            'bytesize': serial.EIGHTBITS,
-            'parity': serial.PARITY_EVEN,
-            'stopbits': serial.STOPBITS_ONE,
-            'timeout': 1
-        }
+        # Configuraciones comunes para CONV32
+        self.serial_configs = [
+            {
+                'baudrate': 9600,
+                'bytesize': serial.EIGHTBITS,
+                'parity': serial.PARITY_NONE,
+                'stopbits': serial.STOPBITS_ONE,
+                'timeout': 1
+            },
+            {
+                'baudrate': 9600,
+                'bytesize': serial.EIGHTBITS,
+                'parity': serial.PARITY_EVEN,
+                'stopbits': serial.STOPBITS_ONE,
+                'timeout': 1
+            },
+            {
+                'baudrate': 19200,
+                'bytesize': serial.EIGHTBITS,
+                'parity': serial.PARITY_NONE,
+                'stopbits': serial.STOPBITS_ONE,
+                'timeout': 1
+            }
+        ]
+        self.current_config = 0  # Índice de la configuración actual
+        self.serial_config = self.serial_configs[self.current_config]
         self.ser = None
         self.setup_logging(log_level)
-        self.test_mode = False  # Modo de prueba
+        self.test_mode = False
 
     def setup_logging(self, level):
         """Configura el sistema de logging"""
@@ -96,58 +115,81 @@ class CONV32Reader:
             if not 1 <= address <= 32:
                 raise ValueError(f"Dirección inválida: {address}. Debe estar entre 1 y 32")
 
+            # Limpiamos buffer antes de leer
+            if self.ser.in_waiting:
+                self.ser.reset_input_buffer()
+
             comando = self.create_command(address)
             self.ser.write(comando)
-            # Aumentamos el tiempo de espera para dar más tiempo al dispositivo
-            time.sleep(0.3)  # Cambiado de 0.1 a 0.3 segundos
-
-            # Añadimos un bucle de espera por respuesta
-            timeout = time.time() + 1.0  # 1 segundo de timeout
+            
+            # Esperamos respuesta con timeout
+            timeout = time.time() + 2.0  # 2 segundos de timeout
+            response = bytearray()
+            
             while time.time() < timeout:
                 if self.ser.in_waiting:
-                    response = self.ser.read(self.ser.in_waiting)
-                    if len(response) >= 4:  # Verificamos que tengamos suficientes bytes
-                        return self.parse_response(response)
+                    byte = self.ser.read()
+                    response.extend(byte)
+                    if len(response) >= 3:  # Esperamos mínimo 3 bytes
+                        break
                 time.sleep(0.1)
+
+            if len(response) >= 3:
+                if self.test_mode:
+                    print(f"Datos recibidos: {response.hex()}")
+                return self.parse_response(response)
             
-            self.logger.debug(f"No se recibió respuesta del dispositivo {address}")
+            if self.test_mode:
+                print(f"No se recibió respuesta completa del dispositivo {address}")
             return None
 
-        except ConnectionError as e:
-            self.logger.error(f"Error de conexión en dispositivo {address}: {e}")
-            raise
         except Exception as e:
             self.logger.error(f"Error al leer dispositivo {address}: {e}")
             return None
 
     def create_command(self, address):
-        """Crea el comando para el dispositivo"""
+        """Crea el comando de lectura para el CONV32 de Full Gauge"""
         try:
-            return bytes([
-                address,
-                0x02,
-                0x00,
-                0x00  # Checksum simplificado
-            ])
+            # Probamos diferentes formatos de comando
+            commands = [
+                bytes([address, 0x03]),           # Formato básico
+                bytes([address, 0x03, 0x00]),     # Con byte adicional
+                bytes([address, 0x02]),           # Comando alternativo
+                bytes([0xFF, address, 0x03])      # Con prefijo
+            ]
+            return commands[0]  # Comenzamos con el primer formato
         except Exception as e:
-            raise DeviceError(f"Error creando comando: {e}")
+            raise DeviceError(f"Error creando comando de lectura: {e}")
 
     def parse_response(self, response):
-        """Parsea la respuesta del dispositivo"""
+        """Parsea la respuesta del CONV32"""
         try:
-            if not response or len(response) < 4:
-                raise DeviceError("Respuesta incompleta del dispositivo")
+            if not response or len(response) < 3:
+                raise DeviceError("Respuesta incompleta del CONV32")
 
-            temperatura = response[2] / 10.0
+            # El CONV32 en modo lectura devuelve:
+            # Byte 0: Dirección del dispositivo
+            # Byte 1: Valor entero de temperatura
+            # Byte 2: Valor decimal / flags
             
-            # Validación básica del valor
-            if not -50 <= temperatura <= 150:
-                raise DeviceError(f"Temperatura fuera de rango: {temperatura}°C")
+            valor_entero = response[1]
+            valor_decimal = response[2] & 0x0F  # Los 4 bits menos significativos
+            
+            # Construimos la temperatura
+            temperatura = valor_entero + (valor_decimal / 10.0)
+            
+            # Verificamos si es negativa (bit más significativo del byte 2)
+            if response[2] & 0x80:
+                temperatura = -temperatura
+            
+            # Validación de rango para CONV32
+            if not -50 <= temperatura <= 105:
+                raise DeviceError(f"Temperatura fuera de rango CONV32: {temperatura}°C")
                 
             return temperatura
 
         except Exception as e:
-            self.logger.error(f"Error parseando respuesta: {e}")
+            self.logger.error(f"Error parseando respuesta CONV32: {e}")
             return None
 
     def set_test_mode(self, enabled=True):
@@ -157,35 +199,46 @@ class CONV32Reader:
             self.logger.setLevel(logging.DEBUG)
 
     def test_connection(self):
-        """Realiza pruebas de conexión y diagnóstico"""
+        """Prueba específica para lectura del CONV32 con múltiples configuraciones"""
         try:
-            print("\n=== Prueba de Conexión CONV32 ===")
-            print(f"Puerto: {self.port}")
-            print(f"Configuración: {self.serial_config}")
-            
-            # Prueba de apertura de puerto
-            print("\n1. Probando apertura de puerto...")
-            self.connect()
-            print("✓ Puerto abierto correctamente")
-            
-            # Prueba de escritura
-            print("\n2. Probando escritura...")
-            self.ser.write(bytes([0x01, 0x02, 0x00, 0x00]))
-            print("✓ Escritura completada")
-            
-            # Prueba de lectura
-            print("\n3. Esperando respuesta (5 segundos)...")
-            timeout = time.time() + 5
-            while time.time() < timeout:
-                if self.ser.in_waiting:
-                    data = self.ser.read(self.ser.in_waiting)
-                    print(f"✓ Datos recibidos: {data.hex()}")
-                    break
-                time.sleep(0.1)
-            else:
-                print("⚠ No se recibieron datos")
-            
-            return True
+            print("\n=== Prueba de Lectura CONV32 ===")
+            print("Probando diferentes configuraciones...")
+
+            for i, config in enumerate(self.serial_configs):
+                self.serial_config = config
+                print(f"\nProbando configuración {i+1}:")
+                print(f"Baudrate: {config['baudrate']}")
+                print(f"Paridad: {config['parity']}")
+                print(f"Bits: {config['bytesize']}")
+                
+                try:
+                    if self.ser and self.ser.is_open:
+                        self.ser.close()
+                    self.connect()
+                    print("✓ Puerto abierto")
+                    
+                    # Probamos lectura con diferentes direcciones comunes
+                    for addr in [1, 2, 3, 0xFF]:
+                        print(f"\nProbando dirección: {addr}")
+                        temp = self.read_device(addr)
+                        if temp is not None:
+                            print(f"✓ Temperatura leída: {temp}°C")
+                            print("\n¡Configuración exitosa encontrada!")
+                            return True
+                        
+                except Exception as e:
+                    print(f"Error con configuración {i+1}: {e}")
+                    continue
+
+            print("\n⚠ No se pudo establecer comunicación")
+            print("\nSugerencias:")
+            print("1. Verifique el cableado RS-485:")
+            print("   - A+ del CONV32 → A+ del conversor")
+            print("   - B- del CONV32 → B- del conversor")
+            print("2. Verifique la alimentación del CONV32")
+            print("3. Confirme la dirección del dispositivo en el CONV32")
+            print("4. Intente con otro conversor RS-485")
+            return False
             
         except Exception as e:
             print(f"\n❌ Error en prueba: {e}")
@@ -218,31 +271,47 @@ class CONV32Reader:
             return self.scan_devices()
 
     def scan_devices(self, retry_count=3, wait_time=1.0):
-        """Escanea dispositivos con parámetros configurables"""
+        """Escanea dispositivos con múltiples configuraciones"""
         self.logger.info("Iniciando escaneo de dispositivos...")
         dispositivos_encontrados = []
 
-        for addr in range(1, 33):
+        # Probamos cada configuración
+        for i, config in enumerate(self.serial_configs):
             if self.test_mode:
-                print(f"\nProbando dirección {addr}/32...")
+                print(f"\nProbando configuración {i+1}...")
+                print(f"Baudrate: {config['baudrate']}, Paridad: {config['parity']}")
             
-            for intento in range(retry_count):
-                try:
-                    if self.ser.in_waiting:
-                        self.ser.reset_input_buffer()
-                    
-                    temp = self.read_device(addr)
-                    if temp is not None:
-                        dispositivos_encontrados.append(addr)
-                        self.logger.info(f"Dispositivo encontrado en dirección {addr}: {temp}°C")
-                        break
-                    elif intento < retry_count - 1:
-                        if self.test_mode:
-                            print(f"  Intento {intento + 1} fallido, esperando {wait_time}s...")
-                        time.sleep(wait_time)
-                except Exception as e:
+            self.serial_config = config
+            try:
+                if self.ser and self.ser.is_open:
+                    self.ser.close()
+                self.connect()
+                
+                # Escaneamos direcciones
+                for addr in range(1, 33):
                     if self.test_mode:
-                        print(f"  Error en intento {intento + 1}: {e}")
+                        print(f"Probando dirección {addr}/32...")
+                    
+                    for intento in range(retry_count):
+                        try:
+                            if self.ser.in_waiting:
+                                self.ser.reset_input_buffer()
+                            
+                            temp = self.read_device(addr)
+                            if temp is not None:
+                                dispositivos_encontrados.append((addr, config))
+                                self.logger.info(f"Dispositivo encontrado en dirección {addr}: {temp}°C")
+                                break
+                            elif intento < retry_count - 1:
+                                time.sleep(wait_time)
+                        except Exception as e:
+                            if self.test_mode:
+                                print(f"Error en intento {intento + 1}: {e}")
+                            
+            except Exception as e:
+                if self.test_mode:
+                    print(f"Error con configuración {i+1}: {e}")
+                continue
 
         return dispositivos_encontrados
 
@@ -261,7 +330,7 @@ class CONV32Reader:
                     self.verify_connection()
                     print(f"\n=== Lecturas {datetime.now().strftime('%H:%M:%S')} ===")
                     
-                    for addr in devices:
+                    for addr, config in devices:
                         try:
                             temp = self.read_device(addr)
                             if temp is not None:
