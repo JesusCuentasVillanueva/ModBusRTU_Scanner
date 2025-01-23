@@ -517,8 +517,25 @@ class CONV32Reader:
             import os
             from pathlib import Path
             
-            # Ubicación típica de la base de datos de SITRAD
-            sitrad_db_path = Path("C:/SitradDesktop.db")
+            # Permitir al usuario especificar la ruta
+            print("\n=== Configuración Base de Datos SITRAD ===")
+            print("Rutas posibles:")
+            print("1. C:/SitradDesktop.db")
+            print("2. C:/Program Files/Sitrad/SitradDesktop.db")
+            print("3. Especificar otra ruta")
+            
+            opcion = input("\nSeleccione una opción (1-3): ")
+            
+            if opcion == "1":
+                sitrad_db_path = Path("C:/SitradDesktop.db")
+            elif opcion == "2":
+                sitrad_db_path = Path("C:/Program Files/Sitrad/SitradDesktop.db")
+            elif opcion == "3":
+                ruta = input("\nIngrese la ruta completa a la base de datos: ")
+                sitrad_db_path = Path(ruta)
+            else:
+                print("Opción inválida")
+                return
             
             if not sitrad_db_path.exists():
                 self.logger.error(f"Base de datos no encontrada en {sitrad_db_path}")
