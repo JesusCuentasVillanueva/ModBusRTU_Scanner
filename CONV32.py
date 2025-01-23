@@ -510,6 +510,60 @@ class CONV32Reader:
         except Exception as e:
             print(f"Error monitoreando SITRAD: {e}")
 
+    def monitor_sitrad_database(self):
+        """Monitorea y lee la base de datos de SITRAD"""
+        try:
+            import sqlite3
+            import os
+            from pathlib import Path
+            
+            # Ubicación típica de la base de datos de SITRAD
+            sitrad_db_path = Path("C:/SitradDesktop.db")
+            
+            if not sitrad_db_path.exists():
+                self.logger.error(f"Base de datos no encontrada en {sitrad_db_path}")
+                return
+            
+            self.logger.info(f"Conectando a base de datos SITRAD: {sitrad_db_path}")
+            
+            try:
+                conn = sqlite3.connect(str(sitrad_db_path))
+                cursor = conn.cursor()
+                
+                # Obtener lista de tablas
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tablas = cursor.fetchall()
+                
+                print("\n=== Tablas encontradas en la base de datos ===")
+                for tabla in tablas:
+                    print(f"\nTabla: {tabla[0]}")
+                    try:
+                        # Mostrar estructura de la tabla
+                        cursor.execute(f"PRAGMA table_info({tabla[0]})")
+                        columnas = cursor.fetchall()
+                        print("Columnas:")
+                        for col in columnas:
+                            print(f"- {col[1]} ({col[2]})")
+                            
+                        # Mostrar primeros registros
+                        cursor.execute(f"SELECT * FROM {tabla[0]} LIMIT 5")
+                        registros = cursor.fetchall()
+                        if registros:
+                            print("\nPrimeros registros:")
+                            for reg in registros:
+                                print(reg)
+                    except sqlite3.Error as e:
+                        print(f"Error leyendo tabla {tabla[0]}: {e}")
+                    
+            except sqlite3.Error as e:
+                self.logger.error(f"Error de SQLite: {e}")
+            finally:
+                if conn:
+                    conn.close()
+                
+        except Exception as e:
+            self.logger.error(f"Error accediendo a base de datos SITRAD: {e}")
+
 class SitradEmulator:
     """Emula el protocolo SITRAD para comunicación con CONV32"""
     
@@ -568,9 +622,10 @@ def main():
             print("4. Activar modo diagnóstico")
             print("5. Configurar sniffer")
             print("6. Monitorear archivo de SITRAD")
-            print("7. Salir")
+            print("7. Leer base de datos SITRAD")
+            print("8. Salir")
 
-            opcion = input("\nSeleccione una opción (1-7): ")
+            opcion = input("\nSeleccione una opción (1-8): ")
 
             if opcion == "1":
                 reader.test_connection()
@@ -595,6 +650,8 @@ def main():
             elif opcion == "6":
                 reader.monitor_sitrad_file()
             elif opcion == "7":
+                reader.monitor_sitrad_database()
+            elif opcion == "8":
                 break
 
     except Exception as e:
