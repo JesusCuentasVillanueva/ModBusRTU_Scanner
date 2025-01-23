@@ -29,6 +29,7 @@ class CONV32Reader:
         }
         self.ser = None
         self.setup_logging(log_level)
+        self.test_mode = False  # Modo de prueba
 
     def setup_logging(self, level):
         """Configura el sistema de logging"""
@@ -97,12 +98,19 @@ class CONV32Reader:
 
             comando = self.create_command(address)
             self.ser.write(comando)
-            time.sleep(0.1)
+            # Aumentamos el tiempo de espera para dar más tiempo al dispositivo
+            time.sleep(0.3)  # Cambiado de 0.1 a 0.3 segundos
 
-            if self.ser.in_waiting:
-                response = self.ser.read(self.ser.in_waiting)
-                return self.parse_response(response)
+            # Añadimos un bucle de espera por respuesta
+            timeout = time.time() + 1.0  # 1 segundo de timeout
+            while time.time() < timeout:
+                if self.ser.in_waiting:
+                    response = self.ser.read(self.ser.in_waiting)
+                    if len(response) >= 4:  # Verificamos que tengamos suficientes bytes
+                        return self.parse_response(response)
+                time.sleep(0.1)
             
+            self.logger.debug(f"No se recibió respuesta del dispositivo {address}")
             return None
 
         except ConnectionError as e:
@@ -142,27 +150,99 @@ class CONV32Reader:
             self.logger.error(f"Error parseando respuesta: {e}")
             return None
 
-    def scan_devices(self, retry_count=2):
-        """Escanea dispositivos con reintentos"""
+    def set_test_mode(self, enabled=True):
+        """Activa/desactiva el modo de prueba con más información de diagnóstico"""
+        self.test_mode = enabled
+        if enabled:
+            self.logger.setLevel(logging.DEBUG)
+
+    def test_connection(self):
+        """Realiza pruebas de conexión y diagnóstico"""
+        try:
+            print("\n=== Prueba de Conexión CONV32 ===")
+            print(f"Puerto: {self.port}")
+            print(f"Configuración: {self.serial_config}")
+            
+            # Prueba de apertura de puerto
+            print("\n1. Probando apertura de puerto...")
+            self.connect()
+            print("✓ Puerto abierto correctamente")
+            
+            # Prueba de escritura
+            print("\n2. Probando escritura...")
+            self.ser.write(bytes([0x01, 0x02, 0x00, 0x00]))
+            print("✓ Escritura completada")
+            
+            # Prueba de lectura
+            print("\n3. Esperando respuesta (5 segundos)...")
+            timeout = time.time() + 5
+            while time.time() < timeout:
+                if self.ser.in_waiting:
+                    data = self.ser.read(self.ser.in_waiting)
+                    print(f"✓ Datos recibidos: {data.hex()}")
+                    break
+                time.sleep(0.1)
+            else:
+                print("⚠ No se recibieron datos")
+            
+            return True
+            
+        except Exception as e:
+            print(f"\n❌ Error en prueba: {e}")
+            return False
+
+    def scan_with_options(self):
+        """Escaneo de dispositivos con opciones configurables"""
+        print("\n=== Opciones de Escaneo ===")
+        print("1. Escaneo rápido (1 intento)")
+        print("2. Escaneo normal (3 intentos)")
+        print("3. Escaneo profundo (5 intentos, pausa larga)")
+        print("4. Escaneo personalizado")
+        
+        opcion = input("\nSeleccione modo de escaneo (1-4): ")
+        
+        if opcion == "1":
+            return self.scan_devices(retry_count=1)
+        elif opcion == "2":
+            return self.scan_devices(retry_count=3)
+        elif opcion == "3":
+            self.logger.info("Iniciando escaneo profundo...")
+            time.sleep(1)  # Pausa inicial
+            return self.scan_devices(retry_count=5, wait_time=2.0)
+        elif opcion == "4":
+            reintentos = int(input("Número de reintentos por dispositivo: "))
+            pausa = float(input("Tiempo de espera entre intentos (segundos): "))
+            return self.scan_devices(retry_count=reintentos, wait_time=pausa)
+        else:
+            print("Opción inválida, usando modo normal")
+            return self.scan_devices()
+
+    def scan_devices(self, retry_count=3, wait_time=1.0):
+        """Escanea dispositivos con parámetros configurables"""
         self.logger.info("Iniciando escaneo de dispositivos...")
         dispositivos_encontrados = []
 
         for addr in range(1, 33):
-            self.logger.debug(f"Escaneando dirección: {addr}/32")
+            if self.test_mode:
+                print(f"\nProbando dirección {addr}/32...")
             
             for intento in range(retry_count):
                 try:
+                    if self.ser.in_waiting:
+                        self.ser.reset_input_buffer()
+                    
                     temp = self.read_device(addr)
                     if temp is not None:
                         dispositivos_encontrados.append(addr)
                         self.logger.info(f"Dispositivo encontrado en dirección {addr}: {temp}°C")
                         break
                     elif intento < retry_count - 1:
-                        time.sleep(0.5)  # Pausa entre reintentos
+                        if self.test_mode:
+                            print(f"  Intento {intento + 1} fallido, esperando {wait_time}s...")
+                        time.sleep(wait_time)
                 except Exception as e:
-                    self.logger.debug(f"Intento {intento + 1} fallido para dirección {addr}: {e}")
-                    if intento == retry_count - 1:
-                        self.logger.warning(f"No se pudo comunicar con dirección {addr}")
+                    if self.test_mode:
+                        print(f"  Error en intento {intento + 1}: {e}")
 
         return dispositivos_encontrados
 
@@ -227,7 +307,8 @@ def main():
             print("No se encontraron puertos COM disponibles")
             return
 
-        print("Puertos COM disponibles:")
+        print("\n=== CONV32 Scanner ===")
+        print("\nPuertos COM disponibles:")
         for i, puerto in enumerate(puertos, 1):
             print(f"{i}. {puerto}")
 
@@ -243,26 +324,41 @@ def main():
                 print("Por favor ingrese un número válido")
 
         reader = CONV32Reader(port=puerto_seleccionado)
-        reader.connect()
 
-        # Escanear dispositivos
-        devices = reader.scan_devices()
-        
-        if devices:
-            print(f"\nDispositivos encontrados: {devices}")
-            input("\nPresione Enter para iniciar monitoreo continuo...")
-            reader.monitor_temperatures(devices)
-        else:
-            print("\nNo se encontraron dispositivos")
+        # Menú de opciones
+        while True:
+            print("\n=== Menú Principal ===")
+            print("1. Probar conexión")
+            print("2. Escanear dispositivos")
+            print("3. Monitoreo continuo")
+            print("4. Activar modo diagnóstico")
+            print("5. Salir")
 
-    except ConnectionError as e:
-        print(f"\nError de conexión: {e}")
-        print("Verifique:")
-        print("1. Que el CONV32 esté conectado")
-        print("2. Que SITRAD esté cerrado")
-        print("3. Que el puerto COM sea el correcto")
+            opcion = input("\nSeleccione una opción (1-5): ")
+
+            if opcion == "1":
+                reader.test_connection()
+            elif opcion == "2":
+                devices = reader.scan_with_options()
+                if devices:
+                    print(f"\nDispositivos encontrados: {devices}")
+                else:
+                    print("\nNo se encontraron dispositivos")
+            elif opcion == "3":
+                devices = reader.scan_devices()
+                if devices:
+                    print(f"\nIniciando monitoreo de dispositivos: {devices}")
+                    reader.monitor_temperatures(devices)
+                else:
+                    print("\nNo hay dispositivos para monitorear")
+            elif opcion == "4":
+                reader.set_test_mode(True)
+                print("\nModo diagnóstico activado")
+            elif opcion == "5":
+                break
+
     except Exception as e:
-        print(f"\nError inesperado: {e}")
+        print(f"\nError: {e}")
     finally:
         if reader:
             reader.close()
