@@ -357,6 +357,181 @@ class CONV32Reader:
         except Exception as e:
             self.logger.error(f"Error al cerrar conexión: {e}")
 
+    def setup_sniffer(self):
+        """Configura el sniffer para capturar comunicación SITRAD"""
+        try:
+            print("\n=== Modo Sniffer SITRAD ===")
+            print("Instrucciones:")
+            print("1. Mantenga este programa ejecutándose")
+            print("2. Abra SITRAD y configure el mismo puerto COM")
+            print("3. El sniffer capturará la comunicación en ambas direcciones")
+            print("\nNotas:")
+            print("- Los datos se guardarán en 'sitrad_capture.log'")
+            print("- Use Ctrl+C para detener la captura")
+            
+            self.sniff_mode = True
+            self.captured_data = []
+            
+            # Cerramos conexión existente si hay
+            if self.ser and self.ser.is_open:
+                self.ser.close()
+            
+            # Abrimos el puerto en modo monitoreo
+            self.ser = serial.Serial(
+                port=self.port,
+                baudrate=9600,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=0.1
+            )
+            
+            print("\nSniffing iniciado en", self.port)
+            print("Esperando comunicación...\n")
+            
+            # Archivo para guardar la captura
+            with open('sitrad_capture.log', 'w') as log_file:
+                while True:
+                    if self.ser.in_waiting:
+                        data = self.ser.read(self.ser.in_waiting)
+                        timestamp = datetime.now()
+                        self.captured_data.append((timestamp, data))
+                        
+                        # Formateamos los datos para mejor visualización
+                        hex_data = ' '.join([f'{b:02X}' for b in data])
+                        ascii_data = ''.join([chr(b) if 32 <= b <= 126 else '.' for b in data])
+                        
+                        log_entry = f"[{timestamp}] HEX: {hex_data} | ASCII: {ascii_data}"
+                        print(log_entry)
+                        log_file.write(log_entry + '\n')
+                        log_file.flush()  # Forzamos escritura inmediata
+                        
+                        # Intentamos identificar patrones conocidos
+                        self.analyze_packet(data)
+                        
+                    time.sleep(0.01)  # Pequeña pausa para no saturar CPU
+                    
+        except KeyboardInterrupt:
+            print("\nSniffing detenido")
+            self.analyze_captured_data()
+        except Exception as e:
+            print(f"Error en sniffer: {e}")
+        finally:
+            if self.ser and self.ser.is_open:
+                self.ser.close()
+
+    def analyze_packet(self, data):
+        """Analiza paquetes en tiempo real buscando patrones"""
+        try:
+            if len(data) < 4:  # Paquetes muy cortos no nos interesan
+                return
+            
+            # Buscamos patrones conocidos
+            if data[0] == 0x02:  # STX - Inicio de transmisión
+                print("\n--- Posible comando SITRAD ---")
+                if len(data) >= 4:
+                    print(f"Dirección: {data[1]}")
+                    print(f"Comando: {data[2]:02X}")
+                    print(f"Checksum: {data[3]:02X}")
+            
+            elif data[0] == 0x03:  # ETX - Fin de transmisión
+                print("--- Fin de transmisión ---\n")
+            
+            # Buscamos secuencias de inicialización
+            if len(data) > 5 and data[0] == 0xFF:
+                print("--- Posible secuencia de inicialización ---")
+            
+        except Exception as e:
+            print(f"Error analizando paquete: {e}")
+
+    def analyze_captured_data(self):
+        """Analiza todos los datos capturados al finalizar"""
+        try:
+            print("\n=== Análisis de Datos Capturados ===")
+            if not self.captured_data:
+                print("No se capturaron datos")
+                return
+            
+            print(f"Total de paquetes capturados: {len(self.captured_data)}")
+            
+            # Análisis de comandos únicos
+            comandos = set()
+            direcciones = set()
+            
+            for timestamp, data in self.captured_data:
+                if len(data) >= 3 and data[0] == 0x02:
+                    comandos.add(data[2])
+                    direcciones.add(data[1])
+            
+            print("\nComandos únicos detectados:")
+            for cmd in comandos:
+                print(f"0x{cmd:02X}")
+            
+            print("\nDirecciones detectadas:")
+            print(sorted(list(direcciones)))
+            
+            print("\nLos datos completos se guardaron en 'sitrad_capture.log'")
+            
+        except Exception as e:
+            print(f"Error en análisis: {e}")
+
+    def monitor_sitrad_file(self):
+        """Monitorea el archivo de datos de SITRAD"""
+        try:
+            import os
+            import json
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
+            
+            # Ubicación típica de datos de SITRAD
+            sitrad_path = os.path.expanduser("~\\AppData\\Local\\Sitrad")
+            
+            class SitradHandler(FileSystemEventHandler):
+                def on_modified(self, event):
+                    if event.src_path.endswith('.dat'):
+                        with open(event.src_path, 'rb') as f:
+                            # Leer datos actualizados de SITRAD
+                            data = f.read()
+                            # Procesar datos según formato de archivo
+                            
+            observer = Observer()
+            observer.schedule(SitradHandler(), sitrad_path, recursive=False)
+            observer.start()
+            
+            print(f"Monitoreando datos de SITRAD en {sitrad_path}")
+            print("Presione Ctrl+C para detener")
+            
+            while True:
+                time.sleep(1)
+                
+        except KeyboardInterrupt:
+            observer.stop()
+            observer.join()
+        except Exception as e:
+            print(f"Error monitoreando SITRAD: {e}")
+
+class SitradEmulator:
+    """Emula el protocolo SITRAD para comunicación con CONV32"""
+    
+    def __init__(self):
+        self.key = None  # Clave de sesión
+        self.session_id = None
+        
+    def generate_session_key(self):
+        """Genera clave de sesión como lo hace SITRAD"""
+        # Esta parte requeriría ingeniería inversa del protocolo
+        pass
+        
+    def encrypt_command(self, command, address):
+        """Encripta comando usando protocolo SITRAD"""
+        # Esta parte requeriría conocer el algoritmo de cifrado
+        pass
+        
+    def decrypt_response(self, response):
+        """Descifra respuesta del CONV32"""
+        # Esta parte requeriría conocer el algoritmo de descifrado
+        pass
+
 def main():
     reader = None
     try:
@@ -391,9 +566,11 @@ def main():
             print("2. Escanear dispositivos")
             print("3. Monitoreo continuo")
             print("4. Activar modo diagnóstico")
-            print("5. Salir")
+            print("5. Configurar sniffer")
+            print("6. Monitorear archivo de SITRAD")
+            print("7. Salir")
 
-            opcion = input("\nSeleccione una opción (1-5): ")
+            opcion = input("\nSeleccione una opción (1-7): ")
 
             if opcion == "1":
                 reader.test_connection()
@@ -414,6 +591,10 @@ def main():
                 reader.set_test_mode(True)
                 print("\nModo diagnóstico activado")
             elif opcion == "5":
+                reader.setup_sniffer()
+            elif opcion == "6":
+                reader.monitor_sitrad_file()
+            elif opcion == "7":
                 break
 
     except Exception as e:
